@@ -9,19 +9,36 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goarch: [amd64, arm64]
+
     steps:
       - name: Install xcaddy
         run: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
 
-      - name: Build Caddy for arm64
+      - name: Build Caddy
         run: |
-          GOOS=linux GOARCH=arm64 ~/go/bin/xcaddy build \
+          GOOS=linux GOARCH=${{ matrix.goarch }} ~/go/bin/xcaddy build \
             --with github.com/caddy-dns/cloudflare@latest \
-            --output caddy_linux_arm64
+            --output caddy_linux_${{ matrix.goarch }}
 
-      - name: Get Caddy version
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: caddy_linux_${{ matrix.goarch }}
+          path: caddy_linux_${{ matrix.goarch }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Get version
         id: version
-        run: echo "version=$(./caddy_linux_arm64 version 2>/dev/null || echo v$(date +%Y%m%d))" >> $GITHUB_OUTPUT
+        run: echo "version=v$(date +%Y%m%d)" >> $GITHUB_OUTPUT
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -29,8 +46,13 @@ jobs:
           tag_name: ${{ steps.version.outputs.version }}
           name: Caddy ${{ steps.version.outputs.version }} with Cloudflare DNS
           body: |
-            Caddy with caddy-dns/cloudflare plugin (arm64)
+            Caddy with caddy-dns/cloudflare plugin
             Built with github.com/caddy-dns/cloudflare@latest
-          files: caddy_linux_arm64
+            
+            - `caddy_linux_amd64` — x86_64
+            - `caddy_linux_arm64` — ARM64
+          files: |
+            caddy_linux_amd64/caddy_linux_amd64
+            caddy_linux_arm64/caddy_linux_arm64
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
