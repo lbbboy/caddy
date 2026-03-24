@@ -3,6 +3,9 @@ name: Build Caddy
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -27,9 +30,7 @@ jobs:
           name: Caddy ${{ steps.version.outputs.version }} with Cloudflare DNS
           body: |
             Caddy with caddy-dns/cloudflare plugin (arm64)
-            
-            Built with:
-            - github.com/caddy-dns/cloudflare@latest
+            Built with github.com/caddy-dns/cloudflare@latest
           files: caddy_linux_arm64
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
