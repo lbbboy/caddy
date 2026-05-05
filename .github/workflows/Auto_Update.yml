@@ -1,0 +1,90 @@
+name: Build Caddy (Auto Update)
+
+on:
+  schedule:
+    - cron: "0 0 * * *" # 每天凌晨 0:00 自动检查
+  workflow_dispatch:      # 保留手动触发按钮
+
+permissions:
+  contents: write
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.compare.outputs.should_run }}
+      latest_tag: ${{ steps.get-tag.outputs.tag }}
+    steps:
+      - name: Get latest Caddy tag
+        id: get-tag
+        run: |
+          # 获取 Caddy 官方最新的正式版 Tag (排除 beta/rc)
+          TAG=$(curl -s https://github.com | jq -r .tag_name)
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Get my latest release tag
+        id: get-my-tag
+        run: |
+          # 获取你自己仓库最后一个 Release 的 Tag
+          MY_TAG=$(curl -s https://github.com{{ github.repository }}/releases/latest | jq -r .tag_name || echo "none")
+          echo "my_tag=$MY_TAG" >> $GITHUB_OUTPUT
+
+      - name: Compare versions
+        id: compare
+        run: |
+          # 如果官方版本不等于我最新的版本，或者手动触发，则运行
+          if [ "${{ steps.get-tag.outputs.tag }}" != "${{ steps.get-my-tag.outputs.my_tag }}" ]; then
+            echo "should_run=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_run=false" >> $GITHUB_OUTPUT
+          fi
+
+  build:
+    needs: check-version
+    # 只有当有新版本，或者是手动点击运行的时候才执行构建
+    if: needs.check-version.outputs.should_run == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - name: Install xcaddy
+        run: go install ://github.com
+
+      - name: Build Caddy
+        run: |
+          # 使用 needs 传过来的官方最新 tag 进行编译
+          GOOS=linux GOARCH=${{ matrix.goarch }} ~/go/bin/xcaddy build ${{ needs.check-version.outputs.latest_tag }} \
+            --with ://github.com \
+            --output caddy_linux_${{ matrix.goarch }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: caddy_linux_${{ matrix.goarch }}
+          path: caddy_linux_${{ matrix.goarch }}
+
+  release:
+    needs: [check-version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # 使用 Caddy 官方的版本号作为你 Release 的 Tag
+          tag_name: ${{ needs.check-version.outputs.latest_tag }}
+          name: Caddy ${{ needs.check-version.outputs.latest_tag }} with Cloudflare DNS
+          body: |
+            Automatically built Caddy version: ${{ needs.check-version.outputs.latest_tag }}
+            Included plugins:
+            - ://github.com
+            
+            Binary files for x86_64 and ARM64 are attached below.
+          files: |
+            caddy_linux_amd64/caddy_linux_amd64
+            caddy_linux_arm64/caddy_linux_arm64
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
