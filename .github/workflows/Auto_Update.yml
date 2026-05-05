@@ -2,8 +2,8 @@ name: Build Caddy (Adaptive Style)
 
 on:
   schedule:
-    - cron: "0 0 * * *" # 每天检查一次
-  workflow_dispatch:      # 手动运行
+    - cron: "0 0 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -12,7 +12,6 @@ jobs:
   check-and-build:
     runs-on: ubuntu-latest
     steps:
-      # 1. 获取 Caddy 官方最新版本
       - name: Get latest Caddy version
         id: caddy
         uses: actions/github-script@v7
@@ -24,7 +23,6 @@ jobs:
             });
             core.setOutput('tag', release.data.tag_name);
 
-      # 2. 获取我仓库的最新版本
       - name: Get my version
         id: mine
         uses: actions/github-script@v7
@@ -40,7 +38,6 @@ jobs:
               core.setOutput('tag', 'none');
             }
 
-      # 3. 设置构建逻辑
       - name: Set Build Flag
         id: flag
         run: |
@@ -50,29 +47,30 @@ jobs:
             echo "run_build=false" >> $GITHUB_OUTPUT
           fi
 
-      # 4. 准备 Go 环境
       - name: Set up Go
         if: steps.flag.outputs.run_build == 'true'
         uses: actions/setup-go@v5
         with:
           go-version: 'stable'
 
-      # 5. 编译 Caddy 二进制 (修正了导入路径格式)
       - name: Build Caddy Binaries
         if: steps.flag.outputs.run_build == 'true'
         run: |
-          # 安装 xcaddy
-          go install ://github.com
+          # 定义包名变量，强制断开任何可能的自动 URL 补全
+          XCADDY_REPO="://github.com"
+          PLUGIN_REPO="://github.com"
           
-          # 循环编译两个架构，注意这里的插件路径不带 https://
+          echo "Installing xcaddy..."
+          go install $XCADDY_REPO
+          
           for arch in amd64 arm64; do
-            echo "正在构建 linux/$arch ..."
+            echo "Building linux/$arch..."
+            # 使用变量拼接，确保不会被识别为 URL
             GOOS=linux GOARCH=$arch ~/go/bin/xcaddy build ${{ steps.caddy.outputs.tag }} \
-              --with ://github.com \
+              --with $PLUGIN_REPO \
               --output caddy_linux_$arch
           done
 
-      # 6. 发布 Release
       - name: Create Release
         if: steps.flag.outputs.run_build == 'true'
         uses: softprops/action-gh-release@v2
@@ -81,9 +79,7 @@ jobs:
           name: Caddy ${{ steps.caddy.outputs.tag }} with Cloudflare DNS
           body: |
             Automatically built Caddy ${{ steps.caddy.outputs.tag }}
-            
-            Included plugins:
-            - ://github.com
+            Included plugins: cloudflare dns
           files: |
             caddy_linux_amd64
             caddy_linux_arm64
