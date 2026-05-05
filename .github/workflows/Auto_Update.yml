@@ -2,8 +2,8 @@ name: Build Caddy (Auto Update)
 
 on:
   schedule:
-    - cron: "0 0 * * *" # 每天凌晨 0:00 自动检查
-  workflow_dispatch:      # 保留手动触发按钮
+    - cron: "0 0 * * *" # 每天北京时间早上 8:00 自动检查
+  workflow_dispatch:      # 保留手动点击按钮触发的功能
 
 permissions:
   contents: write
@@ -13,35 +13,31 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       should_run: ${{ steps.compare.outputs.should_run }}
-      latest_tag: ${{ steps.get-tag.outputs.tag }}
+      latest_tag: ${{ steps.get-latest.outputs.tag }}
     steps:
       - name: Get latest Caddy tag
-        id: get-tag
+        id: get-latest
         run: |
-          # 获取 Caddy 官方最新的正式版 Tag (排除 beta/rc)
+          # 获取 Caddy 官方最新正式版 Tag
           TAG=$(curl -s https://github.com | jq -r .tag_name)
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-
-      - name: Get latest Caddy tag
-        id: get-tag
-        run: |
-          # 必须请求 api.github.com 才能获取 JSON 数据
-          TAG=$(curl -s https://github.com | jq -r .tag_name)
-          
-          # 检查获取到的 TAG 是否为空（防止 API 限制导致报错）
           if [ "$TAG" == "null" ] || [ -z "$TAG" ]; then
-            echo "Error: Could not fetch tag"
+            echo "Error: Could not fetch Caddy tag"
             exit 1
           fi
-          
           echo "tag=$TAG" >> $GITHUB_OUTPUT
 
+      - name: Get my latest release tag
+        id: get-mine
+        run: |
+          # 获取你自己仓库最新 Release 的 Tag，如果没有则默认为 none
+          MY_TAG=$(curl -s https://github.com{{ github.repository }}/releases/latest | jq -r .tag_name // "none")
+          echo "my_tag=$MY_TAG" >> $GITHUB_OUTPUT
 
       - name: Compare versions
         id: compare
         run: |
-          # 如果官方版本不等于我最新的版本，或者手动触发，则运行
-          if [ "${{ steps.get-tag.outputs.tag }}" != "${{ steps.get-my-tag.outputs.my_tag }}" ]; then
+          # 如果官方版本与我本地不同，或者手动触发，则标记为需要运行
+          if [ "${{ steps.get-latest.outputs.tag }}" != "${{ steps.get-mine.outputs.my_tag }}" ]; then
             echo "should_run=true" >> $GITHUB_OUTPUT
           else
             echo "should_run=false" >> $GITHUB_OUTPUT
@@ -49,7 +45,7 @@ jobs:
 
   build:
     needs: check-version
-    # 只有当有新版本，或者是手动点击运行的时候才执行构建
+    # 只有当发现新版本，或者是手动点击运行的时候才执行构建
     if: needs.check-version.outputs.should_run == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     strategy:
@@ -61,7 +57,7 @@ jobs:
 
       - name: Build Caddy
         run: |
-          # 使用 needs 传过来的官方最新 tag 进行编译
+          # 明确编译官方检测到的最新版本，并加入 Cloudflare 插件
           GOOS=linux GOARCH=${{ matrix.goarch }} ~/go/bin/xcaddy build ${{ needs.check-version.outputs.latest_tag }} \
             --with ://github.com \
             --output caddy_linux_${{ matrix.goarch }}
@@ -75,6 +71,8 @@ jobs:
   release:
     needs: [check-version, build]
     runs-on: ubuntu-latest
+    # 同样只在有更新或手动触发时发布
+    if: needs.check-version.outputs.should_run == 'true' || github.event_name == 'workflow_dispatch'
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -82,15 +80,18 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          # 使用 Caddy 官方的版本号作为你 Release 的 Tag
+          # 使用 Caddy 官方的版本号命名你的 Release
           tag_name: ${{ needs.check-version.outputs.latest_tag }}
           name: Caddy ${{ needs.check-version.outputs.latest_tag }} with Cloudflare DNS
           body: |
-            Automatically built Caddy version: ${{ needs.check-version.outputs.latest_tag }}
-            Included plugins:
+            Automatic build of Caddy ${{ needs.check-version.outputs.latest_tag }}
+            
+            Included Plugins:
             - ://github.com
             
-            Binary files for x86_64 and ARM64 are attached below.
+            Build Info:
+            - OS: Linux
+            - Arch: amd64, arm64
           files: |
             caddy_linux_amd64/caddy_linux_amd64
             caddy_linux_arm64/caddy_linux_arm64
